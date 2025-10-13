@@ -1,136 +1,126 @@
 <?php
+/* ========= Config ========= */
+define('DB_HOST',    '127.0.0.1');   // evita resolución DNS
+define('DB_USER',    'root');
+define('DB_PASS',    '');            // ajusta si usas contraseña
+define('DB_NAME',    'droca');
+define('DB_PORT',    3307);          // <-- puerto solicitado
+define('DB_CHARSET', 'utf8mb4');
+
+/* ========= Núcleo de conexión ========= */
 function Conectarse()
 {
-    if (!($link = mysqli_connect("localhost", "root"))) {
+    $mysqli = mysqli_init();
+
+    // Opcional: timeouts más amables
+    $mysqli->options(MYSQLI_OPT_CONNECT_TIMEOUT, 5);
+
+    if (!$mysqli->real_connect(DB_HOST, DB_USER, DB_PASS, DB_NAME, DB_PORT)) {
+        // Retorna 0 para mantener compat. con tu código existente
         return 0;
     }
-    if (!mysqli_select_db($link, "droca")) {
+
+    // Charset seguro
+    if (!$mysqli->set_charset(DB_CHARSET)) {
+        // Si falla el charset, cerramos y devolvemos 0 como haces tú
+        $mysqli->close();
         return 0;
     }
-    return $link;
+    return $mysqli;
 }
 
+/* ========= Helpers internos (no cambian lógica externa) ========= */
+function _fetchAllAssoc(mysqli $cx, string $sql, ?array $params = null, ?string $types = null): array
+{
+    if ($params && $types) {
+        $stmt = $cx->prepare($sql);
+        if (!$stmt) return [];
+        $stmt->bind_param($types, ...$params);
+        if (!$stmt->execute()) { $stmt->close(); return []; }
+        $res = $stmt->get_result();
+        $data = $res ? $res->fetch_all(MYSQLI_ASSOC) : [];
+        $stmt->close();
+        return $data;
+    } else {
+        $res = $cx->query($sql);
+        if (!$res) return [];
+        $data = $res->fetch_all(MYSQLI_ASSOC);
+        $res->free();
+        return $data;
+    }
+}
+
+function _execStmt(mysqli $cx, string $sql, string $types, array $params): array
+{
+    $stmt = $cx->prepare($sql);
+    if (!$stmt) return [false, "Error al preparar: {$cx->error}", null];
+
+    $stmt->bind_param($types, ...$params);
+    $ok = $stmt->execute();
+    $msg = $ok ? null : $stmt->error;
+    $insertId = $ok ? $stmt->insert_id : null;
+    $stmt->close();
+    return [$ok, $msg, $insertId];
+}
+
+/* ========= Zonas / Tipos ========= */
 function obtenerZonas()
 {
-    $conexion = Conectarse();
-    if (!$conexion) {
-        return [];
-    }
-
-    $consulta = "SELECT * FROM zonas;";
-    $resultado = mysqli_query($conexion, $consulta);
-
-    if ($resultado) {
-        $zonas = mysqli_fetch_all($resultado, MYSQLI_ASSOC);
-    } else {
-        $zonas = [];
-    }
-
-    mysqli_close($conexion);
+    $cx = Conectarse();
+    if (!$cx) return [];
+    // Mantengo el nombre de tabla tal como lo tenías aquí
+    $zonas = _fetchAllAssoc($cx, "SELECT * FROM zonas;");
+    $cx->close();
     return $zonas;
 }
 
 function obtenerTiposVivienda()
 {
-    $conexion = Conectarse();
-    if (!$conexion) {
-        return [];
-    }
-
-    $consulta = "SELECT * FROM tipovivienda;";
-    $resultado = mysqli_query($conexion, $consulta);
-
-    if ($resultado) {
-        $tiposVivienda = mysqli_fetch_all($resultado, MYSQLI_ASSOC);
-    } else {
-        $tiposVivienda = [];
-    }
-
-    mysqli_close($conexion);
-    return $tiposVivienda;
+    $cx = Conectarse();
+    if (!$cx) return [];
+    $tipos = _fetchAllAssoc($cx, "SELECT * FROM tipovivienda;");
+    $cx->close();
+    return $tipos;
 }
 
 function obtenerTiposOferta()
 {
-    $conexion = Conectarse();
-    if (!$conexion) {
-        return [];
-    }
-
-    $consulta = "SELECT * FROM tipooferta;";
-    $resultado = mysqli_query($conexion, $consulta);
-
-    if ($resultado) {
-        $tiposOferta = mysqli_fetch_all($resultado, MYSQLI_ASSOC);
-    } else {
-        $tiposOferta = [];
-    }
-
-    mysqli_close($conexion);
-    return $tiposOferta;
+    $cx = Conectarse();
+    if (!$cx) return [];
+    $tipos = _fetchAllAssoc($cx, "SELECT * FROM tipooferta;");
+    $cx->close();
+    return $tipos;
 }
 
+/* ========= Vivienda ========= */
 function insertarVivienda($direccion, $montoPedido, $zona, $tipoVivienda, $tipoOferta)
 {
-    $conexion = Conectarse();
-    if (!$conexion) {
-        die("Error de conexión a la base de datos");
-    }
+    $cx = Conectarse();
+    if (!$cx) { die("Error de conexión a la base de datos"); }
 
     $sql = "INSERT INTO Vivienda (
                 Direccion, MontoPedido, Vendido, Zonas_idZona, TipoVivienda_idTipoV, TipoOferta_idTipoO
-            ) 
-            VALUES (?, ?, FALSE, ?, ?, ?)";
+            ) VALUES (?, ?, FALSE, ?, ?, ?)";
 
-    $stmt = $conexion->prepare($sql);
+    // Mantengo tipos como los tenías (siiii). Si MontoPedido fuera decimal, cambia a 'sdiii'.
+    [$ok, $err] = _execStmt($cx, $sql, 'siiii', [
+        $direccion,
+        (int)$montoPedido,
+        (int)$zona,
+        (int)$tipoVivienda,
+        (int)$tipoOferta
+    ]);
 
-    $stmt->bind_param("siiii", $direccion, $montoPedido, $zona, $tipoVivienda, $tipoOferta);
-
-    if ($stmt->execute()) {
-        echo "Registro insertado correctamente";
-    } else {
-        echo "Error al insertar el registro: " . $stmt->error;
-    }
-
-    $stmt->close();
-    mysqli_close($conexion);
+    echo $ok ? "Registro insertado correctamente" : "Error al insertar el registro: $err";
+    $cx->close();
 }
 
-function insertarTrabajador($nombre, $telefono, $correo)
+function obtenerViviendasDisponibles()
 {
-    $conexion = Conectarse();
-    if (!$conexion) {
-        die("Error de conexión a la base de datos");
-    }
+    $cx = Conectarse();
+    if (!$cx) return [];
 
-    $sql = "INSERT INTO Trabajador (
-                nombre, telefono, correo
-            ) 
-            VALUES (?, ?, ?)";
-
-    $stmt = $conexion->prepare($sql);
-
-    // Cambia la cadena de tipos a 'sss' si todos son strings
-    $stmt->bind_param('sss', $nombre, $telefono, $correo);
-
-    if ($stmt->execute()) {
-        echo "Registro insertado correctamente";
-    } else {
-        echo "Error al insertar el registro: " . $stmt->error;
-    }
-
-    $stmt->close();
-    mysqli_close($conexion);
-}
-
-
-function obtenerViviendasDisponibles() {
-    $conexion = Conectarse();
-    if (!$conexion) {
-        return [];
-    }
-
-    $consulta = "
+    $sql = "
         SELECT 
             V.idVivienda,
             V.Direccion,
@@ -139,293 +129,172 @@ function obtenerViviendasDisponibles() {
             Z.Zona,
             TV.Vivienda AS TipoVivienda,
             TOF.Oferta AS TipoOferta
-        FROM 
-            Vivienda V
-        JOIN 
-            Zonas Z ON V.Zonas_idZona = Z.idZona
-        JOIN 
-            TipoVivienda TV ON V.TipoVivienda_idTipoV = TV.idTipoV
-        JOIN 
-            TipoOferta TOF ON V.TipoOferta_idTipoO = TOF.idTipoO
-        WHERE 
-            V.Vendido = FALSE;
+        FROM Vivienda V
+        JOIN Zonas Z       ON V.Zonas_idZona        = Z.idZona
+        JOIN TipoVivienda TV ON V.TipoVivienda_idTipoV = TV.idTipoV
+        JOIN TipoOferta TOF  ON V.TipoOferta_idTipoO  = TOF.idTipoO
+        WHERE V.Vendido = FALSE;
     ";
 
-    $resultado = mysqli_query($conexion, $consulta);
-
-    if ($resultado) {
-        $viviendas = mysqli_fetch_all($resultado, MYSQLI_ASSOC);
-    } else {
-        $viviendas = [];
-    }
-
-    mysqli_close($conexion);
-    return $viviendas;
+    $rows = _fetchAllAssoc($cx, $sql);
+    $cx->close();
+    return $rows;
 }
 
-function obtenerTabajadores() {
-    $conexion = Conectarse();
-    if (!$conexion) {
-        return [];
-    }
-
-    $consulta = "SELECT * FROM trabajador;";
-    $resultado = mysqli_query($conexion, $consulta);
-
-
-    if ($resultado) {
-        $trabajadores = mysqli_fetch_all($resultado, MYSQLI_ASSOC);
-    } else {
-        $trabajadores = [];
-    }
-
-    mysqli_close($conexion);
-    return $trabajadores;
+/* ========= Trabajador ========= */
+// Nombre original mal escrito conservado para compatibilidad:
+function obtenerTabajadores()
+{
+    return _obtenerTrabajadores();
 }
 
-function insertarCliente($nombre, $telefono, $correo) {
-    $conexion = Conectarse();
-    if (!$conexion) {
-        die("Error de conexión a la base de datos");
-    }
+function _obtenerTrabajadores()
+{
+    $cx = Conectarse();
+    if (!$cx) return [];
+    $rows = _fetchAllAssoc($cx, "SELECT * FROM trabajador;");
+    $cx->close();
+    return $rows;
+}
+
+function insertarTrabajador($nombre, $telefono, $correo)
+{
+    $cx = Conectarse();
+    if (!$cx) { die("Error de conexión a la base de datos"); }
+
+    $sql = "INSERT INTO Trabajador (nombre, telefono, correo) VALUES (?, ?, ?)";
+    [$ok, $err] = _execStmt($cx, $sql, 'sss', [$nombre, $telefono, $correo]);
+
+    echo $ok ? "Registro insertado correctamente" : "Error al insertar el registro: $err";
+    $cx->close();
+}
+
+function obtenerTabajadoresPorId($idTrabajador) // Se conserva el nombre original
+{
+    $cx = Conectarse();
+    if (!$cx) return null;
+
+    $sql = "
+        SELECT T.idTrabajador, T.nombre, T.telefono, T.correo
+        FROM Trabajador T
+        WHERE T.idTrabajador = ?";
+
+    $rows = _fetchAllAssoc($cx, $sql, [(int)$idTrabajador], 'i');
+    $cx->close();
+    return $rows ? $rows[0] : null;
+}
+
+/* ========= Cliente / Cita ========= */
+function insertarCliente($nombre, $telefono, $correo)
+{
+    $cx = Conectarse();
+    if (!$cx) { die("Error de conexión a la base de datos"); }
 
     $sql = "INSERT INTO Cliente (Nombre, Telefono, Correo) VALUES (?, ?, ?)";
+    [$ok, $err, $insertId] = _execStmt($cx, $sql, 'sss', [$nombre, $telefono, $correo]);
 
-    $stmt = $conexion->prepare($sql);
-    $stmt->bind_param("sss", $nombre, $telefono, $correo);
-
-    if ($stmt->execute()) {
-        $idCliente = $stmt->insert_id;
-        $stmt->close();
-        mysqli_close($conexion);
-        return $idCliente;
+    if ($ok) {
+        $cx->close();
+        return $insertId;
     } else {
-        echo "Error al insertar el cliente: " . $stmt->error;
-        $stmt->close();
-        mysqli_close($conexion);
+        echo "Error al insertar el cliente: $err";
+        $cx->close();
         return null;
     }
 }
 
-function insertarCita($fechaVisita, $horaInicio, $horaFin, $idVivienda, $idCliente, $estado) {
-    $conexion = Conectarse();
-    if (!$conexion) {
-        die("Error de conexión a la base de datos");
-    }
+function insertarCita($fechaVisita, $horaInicio, $horaFin, $idVivienda, $idCliente, $estado)
+{
+    $cx = Conectarse();
+    if (!$cx) { die("Error de conexión a la base de datos"); }
 
     $sql = "INSERT INTO Cita (
-                FechaVisita, 
-                HoraInicio, 
-                HoraFin, 
-                esTrato, 
-                Vivienda_idVivienda, 
-                Cliente_idCliente, 
-                Estado_idEstado,
-                Trabajador_idTrabajador,
-                MontoOfrecido,
-                FechaTrato
-            ) 
-            VALUES (?, ?, ?, FALSE, ?, ?, ?, 1, -1, NULL)";
+                FechaVisita, HoraInicio, HoraFin, esTrato, Vivienda_idVivienda, 
+                Cliente_idCliente, Estado_idEstado, Trabajador_idTrabajador, MontoOfrecido, FechaTrato
+            ) VALUES (?, ?, ?, FALSE, ?, ?, ?, 1, -1, NULL)";
 
-    $stmt = $conexion->prepare($sql);
-    $stmt->bind_param("sssiii", $fechaVisita, $horaInicio, $horaFin, $idVivienda, $idCliente, $estado);
+    [$ok, $err] = _execStmt($cx, $sql, 'sssiii', [
+        $fechaVisita, $horaInicio, $horaFin,
+        (int)$idVivienda, (int)$idCliente, (int)$estado
+    ]);
 
-    if ($stmt->execute()) {
-        echo "Cita registrada correctamente.";
-    } else {
-        echo "Error al registrar la cita: " . $stmt->error;
-    }
-
-    $stmt->close();
-    mysqli_close($conexion);
+    echo $ok ? "Cita registrada correctamente." : "Error al registrar la cita: $err";
+    $cx->close();
 }
 
-function obtenerCitasPorTelefono($telefono) {
-    $conexion = Conectarse();
-    if (!$conexion) {
-        die("Error de conexión a la base de datos");
-    }
+function obtenerCitasPorTelefono($telefono)
+{
+    $cx = Conectarse();
+    if (!$cx) { die("Error de conexión a la base de datos"); }
 
-    $consulta = "
+    $sql = "
         SELECT 
-            C.FechaVisita,
-            C.HoraInicio,
-            C.HoraFin,
-            E.Estado,
-            TV.Vivienda AS TipoVivienda,
-            Z.Zona,
-            V.MontoPedido AS Monto,
-            TOF.Oferta AS TipoOferta,
-            C.idCita
-        FROM 
-            Cita C
-        JOIN 
-            Cliente CL ON C.Cliente_idCliente = CL.idCliente
-        JOIN 
-            Estado E ON C.Estado_idEstado = E.idEstado
-        JOIN 
-            Vivienda V ON C.Vivienda_idVivienda = V.idVivienda
-        JOIN 
-            TipoVivienda TV ON V.TipoVivienda_idTipoV = TV.idTipoV
-        JOIN 
-            Zonas Z ON V.Zonas_idZona = Z.idZona
-        JOIN 
-            TipoOferta TOF ON V.TipoOferta_idTipoO = TOF.idTipoO
-        WHERE 
-            CL.Telefono = ?
-        AND 
-            C.Estado_idEstado != 2;
+            C.FechaVisita, C.HoraInicio, C.HoraFin, E.Estado,
+            TV.Vivienda AS TipoVivienda, Z.Zona,
+            V.MontoPedido AS Monto, TOF.Oferta AS TipoOferta, C.idCita
+        FROM Cita C
+        JOIN Cliente CL     ON C.Cliente_idCliente      = CL.idCliente
+        JOIN Estado E       ON C.Estado_idEstado        = E.idEstado
+        JOIN Vivienda V     ON C.Vivienda_idVivienda    = V.idVivienda
+        JOIN TipoVivienda TV ON V.TipoVivienda_idTipoV   = TV.idTipoV
+        JOIN Zonas Z        ON V.Zonas_idZona           = Z.idZona
+        JOIN TipoOferta TOF ON V.TipoOferta_idTipoO     = TOF.idTipoO
+        WHERE CL.Telefono = ?
+          AND C.Estado_idEstado != 2;
     ";
 
-    $stmt = $conexion->prepare($consulta);
-    if (!$stmt) {
-        die("Error al preparar la consulta: " . $conexion->error);
-    }
-
-    $stmt->bind_param("s", $telefono);
-    $stmt->execute();
-    $resultado = $stmt->get_result();
-
-    if ($resultado) {
-        $citas = mysqli_fetch_all($resultado, MYSQLI_ASSOC);
-    } else {
-        echo "Error en la consulta: " . $stmt->error;
-        $citas = [];
-    }
-
-    $stmt->close();
-    mysqli_close($conexion);
-    return $citas;
+    $rows = _fetchAllAssoc($cx, $sql, [$telefono], 's');
+    $cx->close();
+    return $rows;
 }
 
-function cancelarCita($idCita) {
-    $conexion = Conectarse();
-    if (!$conexion) {
-        die("Error de conexión a la base de datos");
-    }
+function cancelarCita($idCita)
+{
+    $cx = Conectarse();
+    if (!$cx) { die("Error de conexión a la base de datos"); }
 
-    $sql = "UPDATE Cita SET Estado_idEstado = 2 WHERE idCita = ?;";
-    $stmt = $conexion->prepare($sql);
-    $stmt->bind_param("i", $idCita);
-    
-    if ($stmt->execute()) {
-        echo "Cita cancelada correctamente.";
-    } else {
-        echo "Error al cancelar la cita: " . $stmt->error;
-    }
+    $sql = "UPDATE Cita SET Estado_idEstado = 2 WHERE idCita = ?";
+    [$ok, $err] = _execStmt($cx, $sql, 'i', [(int)$idCita]);
 
-    $stmt->close();
-    mysqli_close($conexion);
+    echo $ok ? "Cita cancelada correctamente." : "Error al cancelar la cita: $err";
+    $cx->close();
 }
 
-function obtenerInmueblePorId($idInmueble) {
-    $conexion = Conectarse();
-    if (!$conexion) {
-        return null;
-    }
+/* ========= Consultas por ID ========= */
+function obtenerInmueblePorId($idInmueble)
+{
+    $cx = Conectarse();
+    if (!$cx) return null;
 
-    $consulta = "
+    $sql = "
+        SELECT V.idVivienda, V.Direccion, V.MontoPedido, 
+               V.Zonas_idZona, V.TipoVivienda_idTipoV, V.TipoOferta_idTipoO
+        FROM Vivienda V
+        WHERE V.idVivienda = ?";
+
+    $rows = _fetchAllAssoc($cx, $sql, [(int)$idInmueble], 'i');
+    $cx->close();
+    return $rows ? $rows[0] : null;
+}
+
+function obtenerCitasVigentes()
+{
+    $cx = Conectarse();
+    if (!$cx) return [];
+
+    $sql = "
         SELECT 
-            V.idVivienda, 
-            V.Direccion, 
-            V.MontoPedido, 
-            V.Zonas_idZona, 
-            V.TipoVivienda_idTipoV, 
-            V.TipoOferta_idTipoO 
-        FROM 
-            Vivienda V
-        WHERE 
-            V.idVivienda = ?";
-
-    $stmt = $conexion->prepare($consulta);
-    $stmt->bind_param("i", $idInmueble);
-    $stmt->execute();
-    $resultado = $stmt->get_result();
-
-    if ($resultado->num_rows > 0) {
-        $inmueble = $resultado->fetch_assoc();
-    } else {
-        $inmueble = null;
-    }
-
-    $stmt->close();
-    mysqli_close($conexion);
-    
-    return $inmueble;
-}
-
-function obtenerTabajadoresPorId($idTrabajador) {
-    $conexion = Conectarse();
-    if (!$conexion) {
-        return null;
-    }
-
-    $consulta = "
-        SELECT 
-            T.idTrabajador,
-            T.nombre,
-            T.telefono,
-            T.correo
-        FROM 
-            Trabajador T
-        WHERE 
-            T.idTrabajador = ?";
-
-    $stmt = $conexion->prepare($consulta);
-    $stmt->bind_param("i", $idTrabajador);
-    $stmt->execute();
-    $resultado = $stmt->get_result();
-
-    if ($resultado->num_rows > 0) {
-        $idTrabajador = $resultado->fetch_assoc();
-    } else {
-        $idTrabajador = null;
-    }
-
-    $stmt->close();
-    mysqli_close($conexion);
-    
-    return $idTrabajador;
-}
-
-function obtenerCitasVigentes() {
-    $conexion = Conectarse();
-    if (!$conexion) {
-        return [];
-    }
-
-    $consulta = "
-        SELECT 
-            C.idCita,
-            C.FechaVisita,
-            C.HoraInicio,
-            C.HoraFin,
-            CL.Nombre AS NombreCliente,
-            CL.Telefono AS TelefonoCliente,
-            CL.Correo AS CorreoCliente,
-            V.Direccion AS DireccionVivienda,
-            E.Estado
-        FROM 
-            Cita C
-        JOIN 
-            Cliente CL ON C.Cliente_idCliente = CL.idCliente
-        JOIN 
-            Vivienda V ON C.Vivienda_idVivienda = V.idVivienda
-        JOIN 
-            Estado E ON C.Estado_idEstado = E.idEstado
+            C.idCita, C.FechaVisita, C.HoraInicio, C.HoraFin,
+            CL.Nombre AS NombreCliente, CL.Telefono AS TelefonoCliente, CL.Correo AS CorreoCliente,
+            V.Direccion AS DireccionVivienda, E.Estado
+        FROM Cita C
+        JOIN Cliente CL ON C.Cliente_idCliente = CL.idCliente
+        JOIN Vivienda V ON C.Vivienda_idVivienda = V.idVivienda
+        JOIN Estado E   ON C.Estado_idEstado    = E.idEstado
     ";
 
-    $resultado = mysqli_query($conexion, $consulta);
-
-    if ($resultado) {
-        $citas = mysqli_fetch_all($resultado, MYSQLI_ASSOC);
-    } else {
-        $citas = [];
-    }
-
-    mysqli_close($conexion);
-    return $citas;
+    $rows = _fetchAllAssoc($cx, $sql);
+    $cx->close();
+    return $rows;
 }
-
-
 ?>
