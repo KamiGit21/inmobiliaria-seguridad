@@ -1,17 +1,22 @@
 <?php
 // Procesa ALTA de CLIENTE
+
 ini_set('session.cookie_httponly','1');
 ini_set('session.cookie_samesite','Lax');
-session_start();
+if (session_status() !== PHP_SESSION_ACTIVE) { session_start(); }
 session_regenerate_id(true);
 
+require_once __DIR__ . '/auth_helpers.php';  // <-- helpers PRIMERO
+
+// Rate limit antes de tocar DB
 if (hit_rate_limit('rl_reg_cliente', 10)) {
   $_SESSION['flash_error']='Estás enviando muy rápido. Intenta en unos segundos.';
   header("Location: ../registroCliente.php"); exit;
 }
 
-require_once __DIR__ . '/bootstrap_post.php';      // carga $mysqli y valida CSRF/POST
-require_once __DIR__ . '/auth_helpers.php';        // helpers
+// Indica a bootstrap_post a dónde redirigir en caso de error
+$GLOBALS['__POST_REDIRECT'] = '../registroCliente.php';
+require_once __DIR__ . '/bootstrap_post.php';  // valida POST/CSRF y crea $mysqli
 
 // ---------- Inputs ----------
 $nombre   = cap($_POST['nombre']   ?? '', 100);
@@ -45,17 +50,16 @@ if ($err){
   header("Location: ../registroCliente.php"); exit;
 }
 
-// ---------- Bloqueos lógicos para evitar colisión sin índices ----------
+// ---------- Bloqueos lógicos ----------
 $lockU = "cli:usr:".$usuario;
 $lockC = "cli:mail:".$correo;
 
-if (!get_named_lock($mysqli, $lockU, 5)) { $_SESSION['flash_error']='Sistema ocupado (usuario). Intenta de nuevo.'; header("Location: ../registroCliente.php"); exit; }
-if (!get_named_lock($mysqli, $lockC, 5)) { release_named_lock($mysqli,$lockU); $_SESSION['flash_error']='Sistema ocupado (correo). Intenta de nuevo.'; header("Location: ../registroCliente.php"); exit; }
+if (!get_named_lock($mysqli, $lockU, 5)) { $_SESSION['flash_error']='Sistema ocupado (usuario).'; header("Location: ../registroCliente.php"); exit; }
+if (!get_named_lock($mysqli, $lockC, 5)) { release_named_lock($mysqli,$lockU); $_SESSION['flash_error']='Sistema ocupado (correo).'; header("Location: ../registroCliente.php"); exit; }
 
 // ---------- Transacción ----------
 $mysqli->begin_transaction();
 try {
-  // Verificación final dentro de la transacción (doble seguro)
   $s=$mysqli->prepare("SELECT 1 FROM cliente WHERE Usuario=? OR Correo=? LIMIT 1");
   $s->bind_param('ss',$usuario,$correo); $s->execute(); $s->store_result();
   if ($s->num_rows>0){ $s->close(); throw new RuntimeException('Duplicado'); }

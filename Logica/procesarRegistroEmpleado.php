@@ -1,16 +1,19 @@
 <?php
 ini_set('session.cookie_httponly','1');
 ini_set('session.cookie_samesite','Lax');
-session_start();
+if (session_status() !== PHP_SESSION_ACTIVE) { session_start(); }
 session_regenerate_id(true);
+
+require_once __DIR__.'/auth_helpers.php'; // <-- helpers PRIMERO
 
 if (hit_rate_limit('rl_reg_empleado', 10)){
   $_SESSION['flash_error']='Estás enviando muy rápido. Intenta en unos segundos.';
   header("Location: ../registroEmpleado.php"); exit;
 }
 
-require_once __DIR__.'/bootstrap_post.php';
-require_once __DIR__.'/auth_helpers.php';
+// Redirección propia para errores
+$GLOBALS['__POST_REDIRECT'] = '../registroEmpleado.php';
+require_once __DIR__.'/bootstrap_post.php'; // POST/CSRF + $mysqli
 
 $nombre   = cap($_POST['nombre']   ?? '',100);
 $apellido = cap($_POST['apellido'] ?? '',100);
@@ -26,7 +29,6 @@ $usuario = sanitize_username_input($usuarioI,$nombre,$apellido);
 if (!preg_match('/^[a-z]+(\.[a-z0-9]+)*$/',$usuario)){
   $usuario = build_username_base($nombre,$apellido) ?: 'usuario';
 }
-// Escoge un username disponible (consulta sencilla)
 $usuario = username_unico($mysqli,$usuario,'trabajador');
 
 $correo = generar_correo_empleado($usuario,'droca.local');
@@ -44,7 +46,6 @@ if ($err){
   header("Location: ../registroEmpleado.php"); exit;
 }
 
-// Bloqueos lógicos para evitar colisiones sin índices
 $lockU = "emp:usr:".$usuario;
 $lockC = "emp:mail:".$correo;
 
@@ -53,7 +54,6 @@ if (!get_named_lock($mysqli,$lockC,5)){ release_named_lock($mysqli,$lockU); $_SE
 
 $mysqli->begin_transaction();
 try{
-  // Verificación final dentro de la transacción
   $s=$mysqli->prepare("SELECT 1 FROM trabajador WHERE Usuario=? OR Correo=? LIMIT 1");
   $s->bind_param('ss',$usuario,$correo); $s->execute(); $s->store_result();
   if ($s->num_rows>0){ $s->close(); throw new RuntimeException('Duplicado'); }
@@ -66,7 +66,6 @@ try{
         (Nombre,Apellido,Usuario,Telefono,Correo,idCargo,idRol,EstadoCuenta,IntentosFallidos,password_expires_at,is_deleted)
         VALUES (?,?,?,?,?,?,?,?,0,?,0)";
   $stmt=$mysqli->prepare($sql);
-  //            s      s        s       s       s        i       i      s       s
   $stmt->bind_param('sssssiiss', $nombre,$apellido,$usuario,$tel,$correo,$idCargo,$idRol,$estado,$exp);
   $stmt->execute();
   $idTrab=$stmt->insert_id; $stmt->close();
@@ -74,8 +73,7 @@ try{
   $hash = password_hash($pwd, PASSWORD_DEFAULT);
   $stmt=$mysqli->prepare("INSERT INTO password_history (user_type,user_id,PasswordHash) VALUES ('trabajador', ?, ?)");
   $stmt->bind_param('is',$idTrab,$hash);
-  $stmt->execute();
-  $stmt->close();
+  $stmt->execute(); $stmt->close();
 
   $mysqli->commit();
   $_SESSION['flash_success'] = 'Trabajador creado. Se requerirá cambio de contraseña al primer ingreso.';
