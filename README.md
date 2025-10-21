@@ -30,6 +30,6 @@
 ## 5. Acceder a la página del proyecto
 1. Abre tu navegador y accede a la siguiente dirección:  
    ```
-   http://localhost/inmobiliaria
+   http://localhost/inmobiliaria-seguridad
    ```
 2. Verifica que la página se cargue correctamente.
